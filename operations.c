@@ -186,19 +186,25 @@ void perform_backup(const char *backup_filename) {
     int backup_fd = open(backup_filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (backup_fd < 0) {
         perror("Error creating backup file");
-        exit(EXIT_FAILURE);
+        _exit(EXIT_FAILURE);
     }
     kvs_show(backup_fd);
     close(backup_fd);
-    exit(EXIT_SUCCESS);
+    free((void *)backup_filename);  // Liberar a memória alocada para backup_filename
+    _exit(EXIT_SUCCESS);
 }
 
 int kvs_backup(const char *job_filename, int backup_counter, const char *directory) {
-    char backup_filename[MAX_JOB_FILE_NAME_SIZE];
+    char *backup_filename = malloc(MAX_JOB_FILE_NAME_SIZE);
+    if (!backup_filename) {
+        perror("Error allocating memory for backup_filename");
+        return 1;
+    }
+
     char *dot = strrchr(job_filename, '.');
     if (dot) *dot = '\0';
 
-    snprintf(backup_filename, sizeof(backup_filename), "%s/%s-%d.bck", directory, job_filename, backup_counter);
+    snprintf(backup_filename, MAX_JOB_FILE_NAME_SIZE, "%s/%s-%d.bck", directory, job_filename, backup_counter);
 
     pthread_mutex_lock(&backup_mutex);
     while (backups_in_progress >= max_concurrent_backups) {
@@ -215,9 +221,11 @@ int kvs_backup(const char *job_filename, int backup_counter, const char *directo
         backups_in_progress--;
         pthread_cond_signal(&backup_cond);
         pthread_mutex_unlock(&backup_mutex);
+        free(backup_filename);  // Liberar a memória alocada para backup_filename no processo pai
     } else {
         perror("Error creating process for backup");
-        exit(EXIT_FAILURE);
+        free(backup_filename);  // Liberar a memória alocada para backup_filename em caso de erro
+        _exit(EXIT_FAILURE);
     }
     return 0;
 }
