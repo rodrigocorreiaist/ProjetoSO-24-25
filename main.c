@@ -11,8 +11,6 @@
 #include "operations.h"
 #include <pthread.h>
 
-
-
 // Defina a variável global aqui
 int max_concurrent_backups;
 int max_threads;

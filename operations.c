@@ -1,6 +1,6 @@
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -9,7 +9,7 @@
 #include "constants.h"
 #include "parser.h"
 
-pthread_mutex_t kvs_mutex = PTHREAD_MUTEX_INITIALIZER;
+// pthread_mutex_t kvs_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t backup_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t backup_cond = PTHREAD_COND_INITIALIZER;
 int backups_in_progress = 0;
@@ -17,86 +17,60 @@ int backups_in_progress = 0;
 // Inicializando a tabela Hash da KVS
 static struct HashTable* kvs_table = NULL;
 
-/// Função que converte o atraso em milissegundos para uma estrutura timespec
+// Definição dos read-write locks
+pthread_rwlock_t kvs_rwlocks[TABLE_SIZE];  // Array de read-write locks
+
+int hash(const char *key);
+
+// Função que inicializa os read-write locks
+void init_rwlocks() {
+    for (int i = 0; i < TABLE_SIZE; i++) {
+        pthread_rwlock_init(&kvs_rwlocks[i], NULL);
+    }
+}
+
+// Função que converte o atraso em milissegundos para uma estrutura timespec
 static struct timespec delay_to_timespec(unsigned int delay_ms) {
   return (struct timespec){delay_ms / 1000, (delay_ms % 1000) * 1000000};
 }
 
-// Declaração da função hash_function
-unsigned int hash_function(const char* key);
-
-// Função que inicializa os mutexes para as chaves
-void init_key_mutexes() {
-  static pthread_mutex_t key_mutexes[TABLE_SIZE];
-  for (int i = 0; i < TABLE_SIZE; i++) {
-    pthread_mutex_init(&key_mutexes[i], NULL);
-  }
-}
-
-// Função que retorna um mutex específico para uma chave
-pthread_mutex_t* get_mutex_for_key(const char* key) {
-  static pthread_mutex_t key_mutexes[TABLE_SIZE];
-  static pthread_once_t init_once = PTHREAD_ONCE_INIT;
-
-  pthread_once(&init_once, init_key_mutexes);
-  unsigned int hash = hash_function(key) % TABLE_SIZE;
-  return &key_mutexes[hash];
-}
-
-// Definição da função hash_function
-unsigned int hash_function(const char* key) {
-  unsigned int hash = 0;
-  while (*key) {
-    hash = (hash << 5) + (unsigned int)(unsigned char)*key++;
-  }
-  return hash;
-}
 
 int kvs_init() {
-  pthread_mutex_lock(&kvs_mutex);
   if (kvs_table != NULL) {
-    pthread_mutex_unlock(&kvs_mutex);
     fprintf(stderr, "KVS state has already been initialized\n");
     return 1;
   }
   kvs_table = create_hash_table();
-  pthread_mutex_unlock(&kvs_mutex);
   return kvs_table == NULL;
 }
 
 int kvs_terminate() {
-  pthread_mutex_lock(&kvs_mutex);
   if (kvs_table == NULL) {
-    pthread_mutex_unlock(&kvs_mutex);
     fprintf(stderr, "KVS state must be initialized\n");
     return 1;
   }
 
   free_table(kvs_table);
   kvs_table = NULL; // Certifique-se de que a tabela é definida como NULL após a liberação
-  pthread_mutex_unlock(&kvs_mutex);
   return 0;
 }
 
 int kvs_write(size_t num_pairs, char keys[][MAX_STRING_SIZE], char values[][MAX_STRING_SIZE]) {
-  pthread_mutex_lock(&kvs_mutex);
-  if (kvs_table == NULL) {
-    pthread_mutex_unlock(&kvs_mutex);
-    fprintf(stderr, "KVS state must be initialized\n");
-    return 1;
-  }
-  pthread_mutex_unlock(&kvs_mutex);
+    for (size_t i = 0; i < num_pairs; i++) {
+        // Calcula o índice com base na chave
+        int index = hash(keys[i]);
 
-  for (size_t i = 0; i < num_pairs; i++) {
-    pthread_mutex_t* key_mutex = get_mutex_for_key(keys[i]);
-    pthread_mutex_lock(key_mutex);
-    if (write_pair(kvs_table, keys[i], values[i]) != 0) {
-      fprintf(stderr, "Failed to write keypair (%s,%s)\n", keys[i], values[i]);
+        // Obtem o rwlock correspondente à chave
+        pthread_rwlock_t *rwlock = &kvs_rwlocks[index];
+        pthread_rwlock_wrlock(rwlock);  // Lock para escrita
+
+        if (write_pair(kvs_table, keys[i], values[i]) != 0) {
+            fprintf(stderr, "Failed to write keypair (%s, %s)\n", keys[i], values[i]);
+        }
+        
+        pthread_rwlock_unlock(rwlock);  // Desbloqueia o rwlock após a escrita
     }
-    pthread_mutex_unlock(key_mutex);
-  }
-
-  return 0;
+    return 0;
 }
 
 int compare_keys(const void *a, const void *b) {
@@ -106,80 +80,89 @@ int compare_keys(const void *a, const void *b) {
 }
 
 int kvs_read(size_t num_pairs, char keys[][MAX_STRING_SIZE], int output_fd) {
-  pthread_mutex_lock(&kvs_mutex);
   if (kvs_table == NULL) {
-    pthread_mutex_unlock(&kvs_mutex);
     fprintf(stderr, "KVS state must be initialized\n");
     return 1;
   }
-  pthread_mutex_unlock(&kvs_mutex);
 
   qsort(keys, num_pairs, sizeof(keys[0]), compare_keys);
 
   dprintf(output_fd, "[");
-  for (size_t i = 0; i < num_pairs; i++) {
-    pthread_mutex_t* key_mutex = get_mutex_for_key(keys[i]);
-    pthread_mutex_lock(key_mutex);
-    char* result = read_pair(kvs_table, keys[i]);
-    pthread_mutex_unlock(key_mutex);
+    for (size_t i = 0; i < num_pairs; i++) {
+        // Calcula o índice com base na chave
+        int index = hash(keys[i]);
 
-    if (result == NULL) {
-      dprintf(output_fd, "(%s,KVSERROR)", keys[i]);
-    } else {
-      dprintf(output_fd, "(%s,%s)", keys[i], result);
+        // Obtem o rwlock correspondente à chave
+        pthread_rwlock_t *rwlock = &kvs_rwlocks[index];
+        pthread_rwlock_rdlock(rwlock);  // Lock para leitura
+
+        char* result = read_pair(kvs_table, keys[i]);
+
+        pthread_rwlock_unlock(rwlock);  // Desbloqueia o rwlock após a leitura
+
+        if (result == NULL) {
+            dprintf(output_fd, "(%s,KVSERROR)", keys[i]);
+        } else {
+            dprintf(output_fd, "(%s,%s)", keys[i], result);
+            free(result); // Liberar a memória do valor lido
+        }
     }
-    free(result);
-  }
-  dprintf(output_fd, "]\n");
+    dprintf(output_fd, "]\n");
 
-  return 0;
+    return 0;
 }
 
 int kvs_delete(size_t num_pairs, char keys[][MAX_STRING_SIZE], int output_fd) {
-  pthread_mutex_lock(&kvs_mutex);
   if (kvs_table == NULL) {
-    pthread_mutex_unlock(&kvs_mutex);
     fprintf(stderr, "KVS state must be initialized\n");
     return 1;
   }
-  pthread_mutex_unlock(&kvs_mutex);
-  
-  int aux = 0;
-  for (size_t i = 0; i < num_pairs; i++) {
-    pthread_mutex_t* key_mutex = get_mutex_for_key(keys[i]);
-    pthread_mutex_lock(key_mutex);
-    int result = delete_pair(kvs_table, keys[i]);
-    pthread_mutex_unlock(key_mutex);
 
-    if (result != 0) {
-      if (!aux) {
-        dprintf(output_fd, "[");
-        aux = 1;
-      }
-      dprintf(output_fd, "(%s,KVSMISSING)", keys[i]);
+  int aux = 0;
+    for (size_t i = 0; i < num_pairs; i++) {
+        // Calcula o índice com base na chave
+        int index = hash(keys[i]);
+
+        // Obtem o rwlock correspondente à chave
+        pthread_rwlock_t *rwlock = &kvs_rwlocks[index];
+        pthread_rwlock_wrlock(rwlock);  // Lock para escrita
+
+        int result = delete_pair(kvs_table, keys[i]);
+
+        pthread_rwlock_unlock(rwlock);  // Desbloqueia o rwlock após a exclusão
+
+        if (result != 0) {
+            if (!aux) {
+                dprintf(output_fd, "[");
+                aux = 1;
+            }
+            dprintf(output_fd, "(%s,KVSMISSING)", keys[i]);
+        }
     }
-  }
-  if (aux) {
-    dprintf(output_fd, "]\n");
-  }
-  return 0;
+    if (aux) {
+        dprintf(output_fd, "]\n");
+    }
+    return 0;
 }
 
 void kvs_show(int output_fd) {
-  pthread_mutex_lock(&kvs_mutex);
   if (kvs_table == NULL) {
-    pthread_mutex_unlock(&kvs_mutex);
+    fprintf(stderr, "KVS state must be initialized\n");
     return;
   }
 
   for (int i = 0; i < TABLE_SIZE; i++) {
-    KeyNode *keyNode = kvs_table->table[i];
-    while (keyNode != NULL) {
-      dprintf(output_fd, "(%s, %s)\n", keyNode->key, keyNode->value);
-      keyNode = keyNode->next;
+        // Obtém o rwlock correspondente à posição na tabela
+        pthread_rwlock_rdlock(&kvs_rwlocks[i]);  // Lock para leitura
+
+        KeyNode *keyNode = kvs_table->table[i];
+        while (keyNode != NULL) {
+            dprintf(output_fd, "(%s, %s)\n", keyNode->key, keyNode->value);
+            keyNode = keyNode->next; // Move para o próximo nó
+        }
+
+        pthread_rwlock_unlock(&kvs_rwlocks[i]);  // Desbloqueia o rwlock após a leitura
     }
-  }
-  pthread_mutex_unlock(&kvs_mutex);
 }
 
 void perform_backup(const char *backup_filename) {
