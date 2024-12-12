@@ -1,6 +1,6 @@
-#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -51,7 +51,7 @@ int kvs_terminate() {
   }
 
   free_table(kvs_table);
-  kvs_table = NULL; // Certifique-se de que a tabela é definida como NULL após a liberação
+  kvs_table = NULL; // Certifique-se de que a tabela é definida como NULL após a libertação
   return 0;
 }
 
@@ -191,24 +191,33 @@ int kvs_backup(const char *job_filename, int backup_counter, const char *directo
 
     pthread_mutex_lock(&backup_mutex);
     while (backups_in_progress >= max_concurrent_backups) {
-        pthread_cond_wait(&backup_cond, &backup_mutex);
+        pthread_mutex_unlock(&backup_mutex);
+        wait(NULL);  // Espera por qualquer processo filho terminar
+        pthread_mutex_lock(&backup_mutex);
     }
     backups_in_progress++;
     pthread_mutex_unlock(&backup_mutex);
 
     pid_t pid = fork();
     if (pid == 0) {
+        // Processo filho
         perform_backup(backup_filename);
+        _exit(EXIT_SUCCESS);
     } else if (pid > 0) {
+        // Processo pai
+        int status;
+        waitpid(pid, &status, 0);  // Espera o processo filho terminar
+
         pthread_mutex_lock(&backup_mutex);
         backups_in_progress--;
-        pthread_cond_signal(&backup_cond);
         pthread_mutex_unlock(&backup_mutex);
+
         free(backup_filename);  // Liberar a memória alocada para backup_filename no processo pai
     } else {
+        // Erro ao criar o processo
         perror("Error creating process for backup");
         free(backup_filename);  // Liberar a memória alocada para backup_filename em caso de erro
-        _exit(EXIT_FAILURE);
+        return 1;
     }
     return 0;
 }
@@ -216,7 +225,9 @@ int kvs_backup(const char *job_filename, int backup_counter, const char *directo
 void kvs_wait_backup() {
     pthread_mutex_lock(&backup_mutex);
     while (backups_in_progress > 0) {
-        pthread_cond_wait(&backup_cond, &backup_mutex);
+        pthread_mutex_unlock(&backup_mutex);
+        wait(NULL);  // Espera por qualquer processo filho terminar
+        pthread_mutex_lock(&backup_mutex);
     }
     pthread_mutex_unlock(&backup_mutex);
 }
