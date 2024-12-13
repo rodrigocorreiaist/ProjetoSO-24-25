@@ -1,17 +1,16 @@
-#include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <time.h>
+#include <sys/wait.h>
+#include <stdlib.h>
 #include "kvs.h"
 #include "constants.h"
 #include "parser.h"
 
-// pthread_mutex_t kvs_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t backup_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t backup_cond = PTHREAD_COND_INITIALIZER;
 int backups_in_progress = 0;
 
 // Inicializando a tabela Hash da KVS
@@ -48,6 +47,11 @@ int kvs_terminate() {
   if (kvs_table == NULL) {
     fprintf(stderr, "KVS state must be initialized\n");
     return 1;
+  }
+
+  // Destruir read-write locks
+  for (int i = 0; i < TABLE_SIZE; i++) {
+      pthread_rwlock_destroy(&kvs_rwlocks[i]);
   }
 
   free_table(kvs_table);
@@ -194,8 +198,11 @@ int kvs_backup(const char *job_filename, int backup_counter, const char *directo
         pthread_mutex_unlock(&backup_mutex);
         wait(NULL);  // Espera por qualquer processo filho terminar
         pthread_mutex_lock(&backup_mutex);
+        backups_in_progress--;  // Decrementa backups_in_progress após o término do processo filho
+        printf("Backup completed. Backups in progress: %d\n", backups_in_progress);
     }
-    backups_in_progress++;
+    backups_in_progress++;  // Incrementa backups_in_progress ao iniciar um novo backup
+    printf("Starting new backup. Backups in progress: %d\n", backups_in_progress);
     pthread_mutex_unlock(&backup_mutex);
 
     pid_t pid = fork();
@@ -205,13 +212,6 @@ int kvs_backup(const char *job_filename, int backup_counter, const char *directo
         _exit(EXIT_SUCCESS);
     } else if (pid > 0) {
         // Processo pai
-        int status;
-        waitpid(pid, &status, 0);  // Espera o processo filho terminar
-
-        pthread_mutex_lock(&backup_mutex);
-        backups_in_progress--;
-        pthread_mutex_unlock(&backup_mutex);
-
         free(backup_filename);  // Liberar a memória alocada para backup_filename no processo pai
     } else {
         // Erro ao criar o processo
@@ -219,6 +219,7 @@ int kvs_backup(const char *job_filename, int backup_counter, const char *directo
         free(backup_filename);  // Liberar a memória alocada para backup_filename em caso de erro
         return 1;
     }
+
     return 0;
 }
 
@@ -228,8 +229,11 @@ void kvs_wait_backup() {
         pthread_mutex_unlock(&backup_mutex);
         wait(NULL);  // Espera por qualquer processo filho terminar
         pthread_mutex_lock(&backup_mutex);
+        backups_in_progress--;  // Decrementa backups_in_progress após o término do processo filho
+        printf("Limpeza final: Backup completed. Backups in progress: %d\n", backups_in_progress);
     }
     pthread_mutex_unlock(&backup_mutex);
+    pthread_mutex_destroy(&backup_mutex);
 }
 
 void kvs_wait(unsigned int delay_ms) {

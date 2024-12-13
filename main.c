@@ -259,7 +259,7 @@ int main(int argc, char *argv[]) {
         process_job_directory(directory);
         kvs_wait_backup();
         kvs_terminate();
-
+                
         return 0;
     } else {
         fprintf(stderr, "Usage: %s <directory> <max_concurrent_backups> <max_threads>\n", argv[0]);

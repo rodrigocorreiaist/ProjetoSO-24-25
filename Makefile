@@ -2,18 +2,19 @@ CC = gcc
 
 # Para mais informações sobre as flags de warning, consulte a informação adicional no lab_ferramentas
 CFLAGS = -g -std=c17 -D_POSIX_C_SOURCE=200809L \
-		 -Wall -Werror -Wextra \
-		 -Wcast-align -Wconversion -Wfloat-equal -Wformat=2 -Wnull-dereference -Wshadow -Wsign-conversion -Wswitch-enum -Wundef -Wunreachable-code -Wunused \
-		 -fsanitize=address -fsanitize=undefined
+         -Wall -Werror -Wextra \
+         -Wcast-align -Wconversion -Wfloat-equal -Wformat=2 -Wnull-dereference -Wshadow -Wsign-conversion -Wswitch-enum -Wundef -Wunreachable-code -Wunused \
 
 ifneq ($(shell uname -s),Darwin) # if not MacOS
-	CFLAGS += -fmax-errors=5
+    CFLAGS += -fmax-errors=5
 endif
+
+LDFLAGS = -lpthread
 
 all: kvs
 
 kvs: main.c constants.h operations.o parser.o kvs.o
-	$(CC) $(CFLAGS) $(SLEEP) -o kvs main.c operations.o parser.o kvs.o
+	$(CC) $(CFLAGS) -o kvs main.c operations.o parser.o kvs.o $(LDFLAGS)
 
 %.o: %.c %.h
 	$(CC) $(CFLAGS) -c ${@:.o=.c}
