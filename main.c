@@ -36,12 +36,10 @@ void process_job_file(int input_fd, int output_fd, const char *job_filename, con
                     continue;
                 }
                 // Chama a função kvs_write que já lida com erros internos
-
                 if (kvs_write(num_pairs, keys, values)) {
                     fprintf(stderr, "Failed to write pair\n"); // Erro no terminal
                 }
                 break;
-
 
             case CMD_READ:
                 num_pairs = parse_read_delete(input_fd, keys, MAX_WRITE_SIZE, MAX_STRING_SIZE);
@@ -105,7 +103,6 @@ void process_job_file(int input_fd, int output_fd, const char *job_filename, con
                 break;
 
             case EOC:
-                
                 return;
         }
     }
@@ -238,7 +235,6 @@ void process_job_directory(const char *directory) {
     closedir(dir);
 }
 
-
 int main(int argc, char *argv[]) {
     if (argc == 4) { // Verificar se o número correto de argumentos foi passado
         const char *directory = argv[1];
@@ -248,7 +244,6 @@ int main(int argc, char *argv[]) {
         if (max_concurrent_backups <= 0 || max_threads <= 0) {
             fprintf(stderr, "Invalid value for max_backups or max_threads. Must be greater than 0.\n");
             return 1;
-            
         }
 
         if (kvs_init()) {
@@ -259,7 +254,7 @@ int main(int argc, char *argv[]) {
         process_job_directory(directory);
         kvs_wait_backup();
         kvs_terminate();
-                
+
         return 0;
     } else {
         fprintf(stderr, "Usage: %s <directory> <max_concurrent_backups> <max_threads>\n", argv[0]);
